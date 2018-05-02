@@ -35,7 +35,6 @@ public class CellPhoneService extends Service {
         cellPhoneList.add(new CellPhone("华为", 2000));
         cellPhoneList.add(new CellPhone("小米", 1499));
         cellPhoneList.add(new CellPhone("vivo", 2499));
-//        mIsServiceAlive.set(true);
         Executors.newSingleThreadExecutor().execute(new UpdateDataInService());
     }
 
