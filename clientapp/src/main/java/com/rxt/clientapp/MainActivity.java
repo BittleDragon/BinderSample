@@ -10,7 +10,6 @@ import android.os.IBinder;
 import android.os.Message;
 import android.os.RemoteException;
 import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.DividerItemDecoration;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
 import android.util.Log;
@@ -103,7 +102,7 @@ public class MainActivity extends AppCompatActivity {
         ButterKnife.bind(this);
         mHandler = new ClientHandler(this);
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
-        recyclerView.addItemDecoration(new DividerItemDecoration(this, DividerItemDecoration.VERTICAL));
+        recyclerView.addItemDecoration(new DividerItemDecoration(this, DividerItemDecoration.VERTICAL_LIST));
         mAdapter = new CellPhoneAdapter();
         recyclerView.setAdapter(mAdapter);
 
