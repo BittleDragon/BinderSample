@@ -229,7 +229,7 @@
             clist.add(c);
             b.connections.add(c);
 
-	如果flag是Context.BIND\_AUTO\_CREATE，进行下一步
+	如果flag是Context.BIND\_AUTO\_CREATE，调用bringUpServiceLocked方法唤起服务
 
 		if ((flags&Context.BIND_AUTO_CREATE) != 0) {
 	            s.lastActivity = SystemClock.uptimeMillis();
@@ -238,6 +238,29 @@
 	                return 0;
 	            }
 	    }
+
+	第一种情况：如果服务端进程已经起来了，服务也已经跑起来了，并且已经绑定过，第二种情况，进程、服务都已经起来了，但是没有绑定过
+
+		if (s.app != null && b.intent.received) {
+                // Service is already running, so we can immediately
+                // publish the connection.
+                try {
+                    c.conn.connected(s.name, b.intent.binder);
+                } catch (Exception e) {
+                    Slog.w(TAG, "Failure sending service " + s.shortName
+                            + " to connection " + c.conn.asBinder()
+                            + " (in " + c.binding.client.processName + ")", e);
+                }
+
+                // If this is the first app connected back to this binding,
+                // and the service had previously asked to be told when
+                // rebound, then do so.
+                if (b.intent.apps.size() == 1 && b.intent.doRebind) {
+                    requestServiceBindingLocked(s, b.intent, callerFg, true);
+                }
+            } else if (!b.intent.requested) {
+                requestServiceBindingLocked(s, b.intent, callerFg, false);
+            }
 	
 
 ## ActiveServices#bringupServiceLocked
@@ -371,27 +394,7 @@
     }
 
 
-
-	try {
-        ActivityManagerNative.getDefault().serviceDoneExecuting(
-                data.token, SERVICE_DONE_EXECUTING_ANON, 0, 0);
-    } catch (RemoteException e) {
-        // nothing to do.
-    }
-
-## ActivityManagerService#serviceDoneExecuting
-
-	public void serviceDoneExecuting(IBinder token, int type, int startId, int res) {
-        synchronized(this) {
-            if (!(token instanceof ServiceRecord)) {
-                Slog.e(TAG, "serviceDoneExecuting: Invalid service token=" + token);
-                throw new IllegalArgumentException("Invalid service token");
-            }
-            mServices.serviceDoneExecutingLocked((ServiceRecord)token, type, startId, res);
-        }
-    }
-
-## ActiveServices#requestServiceBindingsLocked
+## ActiveServices#requestServiceBindingLocked
 	
 	if ((!i.requested || rebind) && i.apps.size() > 0) {
         try {
@@ -453,15 +456,92 @@
         }
     }
 
-## ActiveServices#serviceDoneExecutingLocked
-待补充
+## ActiveServices#publishServiceLocked
+
+	void publishServiceLocked(ServiceRecord r, Intent intent, IBinder service) {
+        final long origId = Binder.clearCallingIdentity();
+        try {
+            if (DEBUG_SERVICE) Slog.v(TAG_SERVICE, "PUBLISHING " + r
+                    + " " + intent + ": " + service);
+            if (r != null) {
+                Intent.FilterComparison filter
+                        = new Intent.FilterComparison(intent);
+                IntentBindRecord b = r.bindings.get(filter);
+			-------- 对b的一些属性进行赋值，这些将在ActiveServices#bindServiceLocked的判断中用到----------
+                if (b != null && !b.received) {
+                    b.binder = service;
+                    b.requested = true;
+                    b.received = true;
+                    for (int conni=r.connections.size()-1; conni>=0; conni--) {
+                        ArrayList<ConnectionRecord> clist = r.connections.valueAt(conni);
+                        for (int i=0; i<clist.size(); i++) {
+                            ConnectionRecord c = clist.get(i);
+                            if (!filter.equals(c.binding.intent.intent)) {
+                                if (DEBUG_SERVICE) Slog.v(
+                                        TAG_SERVICE, "Not publishing to: " + c);
+                                if (DEBUG_SERVICE) Slog.v(
+                                        TAG_SERVICE, "Bound intent: " + c.binding.intent.intent);
+                                if (DEBUG_SERVICE) Slog.v(
+                                        TAG_SERVICE, "Published intent: " + intent);
+                                continue;
+                            }
+                            if (DEBUG_SERVICE) Slog.v(TAG_SERVICE, "Publishing to: " + c);
+                            try {
+							----------把binder返回到客户端-----
+                                c.conn.connected(r.name, service);
+                            } catch (Exception e) {
+                                Slog.w(TAG, "Failure sending service " + r.name +
+                                      " to connection " + c.conn.asBinder() +
+                                      " (in " + c.binding.client.processName + ")", e);
+                            }
+                        }
+                    }
+                }
+
+                serviceDoneExecutingLocked(r, mDestroyingServices.contains(r), false);
+            }
+        } finally {
+            Binder.restoreCallingIdentity(origId);
+        }
 
 ## ActivityManagerService#startProcessLocked
+> ActiveServices#bringupServiceLocked中调用，经过N次重载之后找到如下启动进程的代码
 
+	// Start the process.  It will either succeed and return a result containing
+    // the PID of the new process, or else throw a RuntimeException.
+    boolean isActivityProcess = (entryPoint == null);
+    if (entryPoint == null) entryPoint = "android.app.ActivityThread";
+    Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "Start proc: " +
+            app.processName);
+    checkTime(startTime, "startProcess: asking zygote to start proc");
+    Process.ProcessStartResult startResult = Process.start(entryPoint,
+            app.processName, uid, uid, gids, debugFlags, mountExternal,
+            app.info.targetSdkVersion, app.info.seinfo, requiredAbi, 
+			instructionSet,app.info.dataDir, entryPointArgs);
 
-#### 进程已创建，服务也正在运行，但是没有被绑定
-- requestServiceBindingLocked
+之后的过程回到ActiveServices#bindServiceLocked方法中
 
-- ActivityThread#handleBindService (重要方法！)
+	if (s.app != null && b.intent.received) {
+        // Service is already running, so we can immediately
+        // publish the connection.
+        try {
+            c.conn.connected(s.name, b.intent.binder);
+        } catch (Exception e) {
+            Slog.w(TAG, "Failure sending service " + s.shortName
+                    + " to connection " + c.conn.asBinder()
+                    + " (in " + c.binding.client.processName + ")", e);
+        }
 
-- publishService (关键方法）
+        // If this is the first app connected back to this binding,
+        // and the service had previously asked to be told when
+        // rebound, then do so.
+        if (b.intent.apps.size() == 1 && b.intent.doRebind) {
+            requestServiceBindingLocked(s, b.intent, callerFg, true);
+        }
+    } else if (!b.intent.requested) {
+		-----------在此处执行了绑定服务并把Binder返回给客户端的过程-----------
+        requestServiceBindingLocked(s, b.intent, callerFg, false);
+    }
+
+#至此，Binder 源码解析结束！
+
